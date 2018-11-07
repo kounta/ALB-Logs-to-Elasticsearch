@@ -1,8 +1,9 @@
 /*
- * This project based on https://github.com/awslabs/amazon-elasticsearch-lambda-samples,https://github.com/blmr/aws-elb-logs-to-elasticsearch.git
+ * This project based on https://github.com/awslabs/amazon-elasticsearch-lambda-samples
+ * & https://github.com/blmr/aws-elb-logs-to-elasticsearch.git
+ *
  * Function for AWS Lambda to get AWS ELB log files from S3, parse
  * and add them to an Amazon Elasticsearch Service domain.
- *
  *
  * Copyright 2015- Amazon.com, Inc. or its affiliates. All Rights Reserved.
  *
@@ -23,7 +24,6 @@ var stream = require('stream');
 var zlib = require('zlib');
 var ES = require('elasticsearch');
 
-
 /* Globals */
 var indexTimestamp;
 var esDomain;
@@ -38,7 +38,7 @@ var bulkTransactions = 0;
 
 // ES configs
 var esTimeout = 100000;
-// var esMaxSockets = 20;
+var esMaxSockets = 20;
 
 /* Lambda "main": Execution starts here */
 exports.handler = function(event, context) {
@@ -50,28 +50,20 @@ exports.handler = function(event, context) {
         endpoint: process.env.ES_ENDPOINT,
         index: process.env.ES_INDEX_PREFIX + '-' + indexTimestamp, // adds a timestamp to index. Example: alblogs-2015.03.31
         doctype: process.env.ES_DOCTYPE,
-        environment: process.env.ES_ENVIRONMENT,
-        deployment: process.env.ES_DEPLOYMENT,
         maxBulkIndexLines: process.env.ES_BULKSIZE // Max Number of log lines to send per bulk interaction with ES
     };
 
     /**
-     * Get connected to Elasticsearch using the official 
-     * elasticsearch.js client and the http-aws-es Connection 
-     * Class for signing requests using IAM creds.
-     *
-     * The AWS credentials are picked up from the environment.
-     * They belong to the IAM role assigned to the Lambda function.
-     * Since the ES requests are signed using these credentials,
-     * make sure to apply a policy that permits ES domain operations
-     * to the role.
+     * Get connected to Elasticsearch using the official elasticsearch.js
+     * client.
      */
     elasticsearch = new ES.Client({
         host: esDomain.endpoint,
-        connectionClass: require('http-aws-es'),
+        apiVersion: '6.3',
+        //connectionClass: require('http-aws-es'),
         log: 'error',
         requestTimeout: esTimeout,
-        // maxSockets: esMaxSockets
+        maxSockets: esMaxSockets
     })
 
     // Prepare bulk buffer
@@ -92,10 +84,6 @@ exports.handler = function(event, context) {
 
     recordStream._transform = function(line, encoding, done) {
         var logRecord = parse(line.toString());
-
-        // Add standard fields to help with searching
-        logRecord['environment'] = esDomain.environment;
-        logRecord['deployment'] = esDomain.deployment;
 
         var serializedRecord = JSON.stringify(logRecord);
         this.push(serializedRecord);
