@@ -20,8 +20,11 @@ The zip file thus created is the Lambda Deployment Package.
 
 ### AWS Configuration 
 
-Set up the Lambda function and the S3 bucket. You can reffer to for more details >
+Set up the Lambda function and the S3 bucket. You can refer to for more details >
 [Lambda-S3 Walkthrough](http://docs.aws.amazon.com/lambda/latest/dg/walkthrough-s3-events-adminuser.html).
+
+Set up the Lambda function & IAM permissions for VPC access / ENI create permissions >
+[Lambda-VPC docs](https://docs.aws.amazon.com/lambda/latest/dg/vpc.html).
 
 Please keep in mind the following notes and configuration overrides:
 
@@ -34,7 +37,7 @@ Please keep in mind the following notes and configuration overrides:
 * You need to set Lambda environment variables for the following:
 ```
  ES_DOCTYPE: for the `type` field in Elasticsearch
- ES_ENDPOINT: the FQDN of your AWS Elasticsearch Service
+ ES_ENDPOINT: the http://FQDN:port of your Elasticsearch Service
  ES_INDEX_PREFIX: the prefix for your indices, which will be suffixed with the date
  ES_BULKSIZE: The number of log lines to bulk index into ES at once. Try 200.
  ```
@@ -43,7 +46,7 @@ Please keep in mind the following notes and configuration overrides:
 
   1. Lambda permits S3 to push event notification to it
   2. S3 permits Lambda to fetch the created objects from a given bucket
-  3. ES permits Lambda to add documents to the given domain
+  3. Lambda permissions for VPC / ENI access
   4. Lambda handler is set to `index.handler`
   5. Don't forget the ES domain parameters in index.js
 
@@ -51,17 +54,9 @@ Please keep in mind the following notes and configuration overrides:
   for (1).  
   For (2), when creating the IAM role, choose the "S3 execution role"
   option; this will load the role with permissions to read from the S3
-  bucket.  
-For (5)
+  bucket.
+  For (3), make sure you enable VPC access with ec2:eni permissions. 
 
-```
-var esDomain = {
-    endpoint: 'elastic-search-domain-123456.us-east-1.es.amazonaws.com',
-    region: 'us-east-1',
-    index: 'alb-access-logs-' + indexTimestamp,
-    doctype: 'alb-access-logs'
-};
-```
 
 **Event source**
 Add Event source for your lambda function

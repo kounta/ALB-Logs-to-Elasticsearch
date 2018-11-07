@@ -4,7 +4,7 @@
   "version": "2.0.0",
   "maintainers": [
     {
-      "name": "Mike Sollanych"
+      "name": "Paul De Audney <devops@safetyculture.io>"
     }
   ],
   "dependencies": {
@@ -14,6 +14,6 @@
     "byline": "4.2.1",
     "elasticsearch": "15.1.1"
   },
-  "repository": "https://github.com/mike-sol/ALB-Logs-to-Elasticsearch",
+  "repository": "https://github.com/SafetyCulture/ALB-Logs-to-Elasticsearch",
   "license": "Amazon Software License"
 }
