@@ -36,9 +36,6 @@ Please keep in mind the following notes and configuration overrides:
  ES_DOCTYPE: for the `type` field in Elasticsearch
  ES_ENDPOINT: the FQDN of your AWS Elasticsearch Service
  ES_INDEX_PREFIX: the prefix for your indices, which will be suffixed with the date
- ES_REGION: The AWS region, e.g. us-west-1, of your Elasticsearch instance
- ES_ENVIRONMENT: A value to append as the `environment` field in each record.
- ES_DEPLOYMENT: A value to append as the `deployment` field in each record.
  ES_BULKSIZE: The number of log lines to bulk index into ES at once. Try 200.
  ```
 
@@ -55,20 +52,6 @@ Please keep in mind the following notes and configuration overrides:
   For (2), when creating the IAM role, choose the "S3 execution role"
   option; this will load the role with permissions to read from the S3
   bucket.  
-  For (3), add the following access policy to permit ES operations
-  to the role.
-  
-```
-{
-      "Sid": "AllowLambdaAccess",
-      "Effect": "Allow",
-      "Principal": {
-        "AWS": "arn:aws:iam::123456789012:role/lambda_s3_exec_role"
-      },
-      "Action": "es:*",
-      "Resource": "arn:aws:es:eu-west-1:123456789012:domain/elastic-search-domain/*"
-}
-```
 For (5)
 
 ```
