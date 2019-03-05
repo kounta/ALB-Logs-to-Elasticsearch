@@ -17,318 +17,308 @@
  */
 
 /* Imports */
-var AWS = require('aws-sdk');
-var LineStream = require('byline').LineStream;
-var path = require('path');
-var stream = require('stream');
-var zlib = require('zlib');
-var ES = require('elasticsearch');
+const AWS = require('aws-sdk')
+const LineStream = require('byline').LineStream
+const stream = require('stream')
+const zlib = require('zlib')
+const ES = require('elasticsearch')
+const url = require('url')
 
 /* Globals */
-var indexTimestamp;
-var esDomain;
-var elasticsearch;
-var s3 = new AWS.S3();
-
+var indexTimestamp
+var esDomain
+var elasticsearch
+const s3 = new AWS.S3()
 // Bulk indexing and stats
-var totalIndexedLines = 0;
-var totalStreamedLines = 0;
-var bulkBuffer = [];
-var bulkTransactions = 0;
-
+var totalIndexedLines = 0
+var totalStreamedLines = 0
+var bulkBuffer = []
+var bulkTransactions = 0
 // ES configs
-var esTimeout = 100000;
-var esMaxSockets = 20;
+const esTimeout = 100000
+const esMaxSockets = 20
 
 /* Lambda "main": Execution starts here */
-exports.handler = function(event, context) {
+exports.handler = (event, context) => {
+  // Set indexTimestamp and esDomain index fresh on each run
+  indexTimestamp = new Date().toISOString().replace(/-/g, '.').replace(/T.+/, '')
 
-    // Set indexTimestamp and esDomain index fresh on each run
-    indexTimestamp = new Date().toISOString().replace(/\-/g, '.').replace(/T.+/, '');
+  esDomain = {
+    endpoint: process.env.ES_ENDPOINT,
+    index: process.env.ES_INDEX_PREFIX + '-' + indexTimestamp, // adds a timestamp to index. Example: alblogs-2015.03.31
+    doctype: process.env.ES_DOCTYPE,
+    maxBulkIndexLines: process.env.ES_BULKSIZE // Max Number of log lines to send per bulk interaction with ES
+  }
 
-    esDomain = {
-        endpoint: process.env.ES_ENDPOINT,
-        index: process.env.ES_INDEX_PREFIX + '-' + indexTimestamp, // adds a timestamp to index. Example: alblogs-2015.03.31
-        doctype: process.env.ES_DOCTYPE,
-        maxBulkIndexLines: process.env.ES_BULKSIZE // Max Number of log lines to send per bulk interaction with ES
-    };
-
-    /**
+  /**
      * Get connected to Elasticsearch using the official elasticsearch.js
      * client.
      */
-    elasticsearch = new ES.Client({
-        host: esDomain.endpoint,
-        apiVersion: '6.3',
-        //connectionClass: require('http-aws-es'),
-        log: 'error',
-        requestTimeout: esTimeout,
-        maxSockets: esMaxSockets
-    })
+  elasticsearch = new ES.Client({
+    host: esDomain.endpoint,
+    apiVersion: '6.3',
+    // connectionClass: require('http-aws-es'),
+    log: 'error',
+    requestTimeout: esTimeout,
+    maxSockets: esMaxSockets
+  })
 
-    // Prepare bulk buffer
-    initBulkBuffer();
+  // Prepare bulk buffer
+  initBulkBuffer()
 
-    /* == Streams ==
+  /* == Streams ==
      * To avoid loading an entire (typically large) log file into memory,
      * this is implemented as a pipeline of filters, streaming log data
      * from S3 to ES.
      * Flow: S3 file stream -> Log Line stream -> Log Record stream -> Lambda buffer -> ES Bulk API
      */
-    var lineStream = new LineStream();
+  const lineStream = new LineStream()
 
-    // A stream of log records, from parsing each log line
-    var recordStream = new stream.Transform({
-        objectMode: true
-    })
+  // A stream of log records, from parsing each log line
+  const recordStream = new stream.Transform({
+    objectMode: true
+  })
 
-    recordStream._transform = function(line, encoding, done) {
-        var logRecord = parse(line.toString());
+  recordStream._transform = (line, encoding, done) => {
+    const logRecord = parse(line.toString())
 
-        var serializedRecord = JSON.stringify(logRecord);
-        this.push(serializedRecord);
+    const serializedRecord = JSON.stringify(logRecord)
+    this.push(serializedRecord)
 
-        totalStreamedLines++;
-        done();
-    }
-    event.Records.forEach(function(record) {
-        var bucket = record.s3.bucket.name;
-        var objKey = decodeURIComponent(record.s3.object.key.replace(/\+/g, ' '));
-        s3LogsToES(bucket, objKey, context, lineStream, recordStream);
-    });
+    totalStreamedLines++
+    done()
+  }
+  event.Records.forEach((record) => {
+    const bucket = record.s3.bucket.name
+    const objKey = decodeURIComponent(record.s3.object.key.replace(/\+/g, ' '))
+    s3LogsToES(bucket, objKey, context, lineStream, recordStream)
+  })
 }
 
 /*
  * Get the log file from the given S3 bucket and key.  Parse it and add
  * each log record to the ES domain.
  *
- * Note: The Lambda function should be configured to filter for 
+ * Note: The Lambda function should be configured to filter for
  * .log.gz files (as part of the Event Source "suffix" setting).
  */
-function s3LogsToES(bucket, key, context, lineStream, recordStream) {
+const s3LogsToES = (bucket, key, context, lineStream, recordStream) => {
+  const s3Stream = s3.getObject({
+    Bucket: bucket,
+    Key: key
+  }).createReadStream()
 
-    var s3Stream = s3.getObject({
-        Bucket: bucket,
-        Key: key
-    }).createReadStream();
+  const gunzipStream = zlib.createGunzip()
 
-    var gunzipStream = zlib.createGunzip();
+  s3Stream
+    .pipe(gunzipStream)
+    .pipe(lineStream)
+    .pipe(recordStream)
+    .on('data', (parsedEntry) => {
+      // Add this log entry to the buffer
+      addToBulkBuffer(parsedEntry)
 
-    s3Stream
-        .pipe(gunzipStream)
-        .pipe(lineStream)
-        .pipe(recordStream)
-        .on('data', function(parsedEntry) {
-
-            // Add this log entry to the buffer
-            addToBulkBuffer(parsedEntry);
-
-            // See if it's time to flush and proceed
-            checkFlushBuffer();
-        })
-        .on('error', function() {
-            console.log(
-                'Error getting object "' + key + '" from bucket "' + bucket + '".  ' +
-                'Make sure they exist and your bucket is in the same region as this function.');
-            context.fail();
-        })
-        .on('finish', function() {
-            flushBuffer();
-            console.log("Process complete. "+totalIndexedLines+" out of "+totalStreamedLines+" added in "+bulkTransactions+" transactions.");
-            context.succeed();
-        })
+      // See if it's time to flush and proceed
+      checkFlushBuffer()
+    })
+    .on('error', () => {
+      console.log(
+        'Error getting object "' + key + '" from bucket "' + bucket + '".  ' +
+                'Make sure they exist and your bucket is in the same region as this function.')
+      context.fail()
+    })
+    .on('finish', () => {
+      flushBuffer()
+      console.log('Process complete. ' + totalIndexedLines + ' out of ' + totalStreamedLines + ' added in ' + bulkTransactions + ' transactions.')
+      context.succeed()
+    })
 }
-
 
 /*
  * Bulk Buffering Functions
  */
-function initBulkBuffer() {
-    bulkBuffer = [];
+const initBulkBuffer = () => {
+  bulkBuffer = []
 }
 
-function addToBulkBuffer(doc) {
-    bulkBuffer.push(doc);
+const addToBulkBuffer = (doc) => {
+  bulkBuffer.push(doc)
 }
 
-function checkFlushBuffer() {
-    if (bulkBuffer.length >= esDomain.maxBulkIndexLines) {
-        flushBuffer();
-    }
+const checkFlushBuffer = () => {
+  if (bulkBuffer.length >= esDomain.maxBulkIndexLines) {
+    flushBuffer()
+  }
 }
 
-function flushBuffer() {
-    // Map the raw lines into an ES bulk transaction body
-    bulkBody = convertBufferToBulkBody(bulkBuffer);
+const flushBuffer = () => {
+  // Map the raw lines into an ES bulk transaction body
+  const bulkBody = convertBufferToBulkBody(bulkBuffer)
 
-    // Submit to ES
-    postBulkDocumentsToES(bulkBody);
+  // Submit to ES
+  postBulkDocumentsToES(bulkBody)
 
-    // Keep stats
-    numLines = bulkBody.length / 2;
-    totalIndexedLines += numLines;
-    bulkTransactions++;
+  // Keep stats
+  const numLines = bulkBody.length / 2
+  totalIndexedLines += numLines
+  bulkTransactions++
 
-    // Clear the buffer
-    initBulkBuffer();
+  // Clear the buffer
+  initBulkBuffer()
 }
 
-function convertBufferToBulkBody(buffer) {
+const convertBufferToBulkBody = (buffer) => {
+  let bulkBody = []
 
-    bulkBody = [];
+  for (const i in buffer) {
+    const logEntry = buffer[i]
 
-    for (var i in buffer) {
-        logEntry = buffer[i];
+    bulkBody.push({ index: { _index: esDomain.index, _type: esDomain.doctype } })
+    bulkBody.push(logEntry)
+  }
 
-        bulkBody.push({ index: { _index: esDomain.index, _type: esDomain.doctype } });
-        bulkBody.push(logEntry);
-    }
-
-    return bulkBody;
+  return bulkBody
 }
 
-function postBulkDocumentsToES(bulkBody) {
-    elasticsearch.bulk({ body: bulkBody });
+const postBulkDocumentsToES = (bulkBody) => {
+  elasticsearch.bulk({ body: bulkBody })
 }
 
 /**
  * Line Parser.
  * It would have been much easier with Logstash Grok...
  */
-function parse(line) {
+const parse = (line) => {
+  // Fields in log lines are essentially space separated,
+  // but are also quote-enclosed for strings containing spaces.
+  const fieldNames = [
+    'type',
+    'timestamp',
+    'elb',
+    'client',
+    'target',
+    'request_processing_time',
+    'target_processing_time',
+    'response_processing_time',
+    'elb_status_code',
+    'target_status_code',
+    'received_bytes',
+    'sent_bytes',
+    'request',
+    'user_agent',
+    'ssl_cipher',
+    'ssl_protocol',
+    'target_group_arn',
+    'trace_id',
+    'domain_name',
+    'chosen_cert_arn',
+    'matched_rule_priority',
+    'request_creation_time',
+    'actions_executed',
+    'redirect_url',
+    'error_reason'
+  ]
 
-    var url = require('url');
+  // First phase, separate out the fields
+  let withinQuotes = false
+  let currentField = 0
+  let currentValue = ''
+  let currentNumeric = NaN
 
-    // Fields in log lines are essentially space separated,
-    // but are also quote-enclosed for strings containing spaces.
-    var field_names = [
-        'type',
-        'timestamp',
-        'elb',
-        'client',
-        'target',
-        'request_processing_time',
-        'target_processing_time',
-        'response_processing_time',
-        'elb_status_code',
-        'target_status_code',
-        'received_bytes',
-        'sent_bytes',
-        'request',
-        'user_agent',
-        'ssl_cipher',
-        'ssl_protocol',
-        'target_group_arn',
-        'trace_id',
-        'domain_name',
-        'chosen_cert_arn',
-        'waf_number',
-        'waf_time',
-        'waf_message'
-    ];
+  let parsed = {}
 
-    // First phase, separate out the fields
-    within_quotes = false;
-    current_field = 0;
-    current_value = '';
-    current_numeric = NaN;
+  // Remove trailing newline
+  if (line.match(/\n$/)) {
+    line = line.slice(0, line.length - 1)
+  }
 
-    var parsed = {};
+  // Character by character
+  for (const i in line) {
+    const c = line[i]
 
-    // Remove trailing newline
-    if (line.match(/\n$/)) {
-        line = line.slice(0, line.length - 1);
-    }
+    if (!withinQuotes) {
+      if (c === '"') {
+        // Beginning a quoted field.
+        withinQuotes = true
+      } else if (c === ' ') {
+        // Separator. Moving on to the next field.
 
-    // Character by character
-    for (var i in line) {
-
-        c = line[i];
-
-        if (!within_quotes) {
-            if (c == '"') {
-                // Beginning a quoted field.
-                within_quotes = true;
-            } else if (c == " ") {
-                // Separator. Moving on to the next field. 
-
-                // Convert to numeric type if appropriate.
-                // This is needed to make sure Elasticsearch gets the
-                // dynamic mapping correct.
-                current_numeric = Number(current_value)
-                if (!isNaN(current_numeric)) {
-                    current_value = current_numeric;
-                }
-
-                // Save current and reset.
-                parsed[field_names[current_field]] = current_value;
-                current_field++;
-                current_value = '';
-
-            } else {
-                // Part of this field.
-                current_value += c;
-            }
-        } else {
-            if (c == '"') {
-                // Ending a quoted field.
-                within_quotes = false;
-            } else {
-                // Part of this quoted field.
-                current_value += c;
-            }
-        }
-    }
-
-    // Save off the last one
-    parsed[field_names[current_field]] = current_value;
-
-    // Second phase, cleanups.
-
-    // Breaking out the port for the client and target, if there's a colon present
-    colon_sep = ['client', 'target']
-    for (var i in colon_sep) {
-        var orig = parsed[colon_sep[i]];
-
-        if (orig.indexOf(":") > 0) {
-            splat = orig.split(":");
-            parsed[colon_sep[i]] = splat[0]
-            parsed[colon_sep[i] + "_port"] = Number(splat[1])
-        }
-    }
-
-    // Dropping the target status code if there isn't one
-    if (parsed['target_status_code'] == '-') {
-        delete parsed['target_status_code']
-    }
-    if (parsed['undefined']) delete parsed['undefined']
-
-    // Third phase, parsing out the request into more fields
-    // Only do this if there's actually data in that field
-    if (parsed['request'].trim() != '- - -') {
-
-        splat = parsed['request'].split(" ");
-
-        // Basic values
-        parsed['request_method'] = splat[0]
-        parsed['request_uri'] = splat[1]
-        parsed['request_http_version'] = splat[2]
-
-        // If we can parse the URL, we can populate other fields properly
-        try {
-            uri = url.parse(splat[1]);
-
-            parsed['request_uri_scheme'] = uri.protocol ? uri.protocol : '';
-            parsed['request_uri_host'] = uri.hostname ? uri.hostname : '';
-            parsed['request_uri_port'] = uri.port ? uri.port : '';
-            parsed['request_uri_path'] = uri.pathname ? uri.pathname : '';
-            parsed['request_uri_query'] = uri.query ? uri.query : '';
+        // Convert to numeric type if appropriate.
+        // This is needed to make sure Elasticsearch gets the
+        // dynamic mapping correct.
+        currentNumeric = Number(currentValue)
+        if (!isNaN(currentNumeric)) {
+          currentValue = currentNumeric
         }
 
-        // Otherwise, we just leave them out.
-        catch (e) {}
+        // Save current and reset.
+        const fieldName = fieldNames[currentField]
+        parsed[fieldName] = currentValue
+        currentField++
+        currentValue = ''
+      } else {
+        // Part of this field.
+        currentValue += c
+      }
+    } else {
+      if (c === '"') {
+        // Ending a quoted field.
+        withinQuotes = false
+      } else {
+        // Part of this quoted field.
+        currentValue += c
+      }
     }
+  }
 
-    // All done.
-    return parsed;
+  // Save off the last one
+  parsed[fieldNames[currentField]] = currentValue
+
+  // Second phase, cleanups.
+
+  // Breaking out the port for the client and target, if there's a colon present
+  const colonSep = ['client', 'target']
+  for (let i in colonSep) {
+    const orig = parsed[colonSep[i]]
+
+    if (orig.indexOf(':') > 0) {
+      const splat = orig.split(':')
+      parsed[colonSep[i]] = splat[0]
+      parsed[colonSep[i] + '_port'] = Number(splat[1])
+    }
+  }
+
+  // Don't put '-' into fields that are otherwise numbers
+  if (parsed['matched_rule_priority'] === '-') {
+    delete parsed['matched_rule_priority']
+  }
+  if (parsed['target_status_code'] === '-') {
+    delete parsed['target_status_code']
+  }
+  if (parsed['undefined']) delete parsed['undefined']
+
+  // Third phase, parsing out the request into more fields
+  // Only do this if there's actually data in that field
+  if (parsed['request'].trim() !== '- - -') {
+    const splat = parsed['request'].split(' ')
+
+    // Basic values
+    parsed['request_method'] = splat[0]
+    parsed['request_uri'] = splat[1]
+    parsed['request_http_version'] = splat[2]
+
+    // If we can parse the URL, we can populate other fields properly
+    try {
+      const uri = url.parse(splat[1])
+      // Strip trailing colon here, it seems to be left in sometimes?
+      parsed['request_uri_scheme'] = uri.protocol ? uri.protocol.replace(/:$/, '') : ''
+      parsed['request_uri_host'] = uri.hostname ? uri.hostname : ''
+      parsed['request_uri_port'] = uri.port ? parseInt(uri.port) : 0
+      parsed['request_uri_path'] = uri.pathname ? uri.pathname : ''
+      parsed['request_uri_query'] = uri.query ? uri.query : ''
+    } catch (e) {}
+  }
+
+  // All done.
+  return parsed
 }
