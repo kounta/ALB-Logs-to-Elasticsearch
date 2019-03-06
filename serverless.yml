@@ -1,4 +1,4 @@
-service: alb-logs-to-elasticsearch # NOTE: update this with your service name
+service: alb-logs-to-elasticsearch
 
 provider:
   name: aws
