@@ -1,5 +1,5 @@
 {
-  "name": "alb_logs_to_elasticsearch",
+  "name": "alb-logs-to-elasticsearch",
   "description": "AWS Lambda to get ALB log files from S3 and parse them to ES with bulk indexing",
   "version": "3.0.0",
   "dependencies": {
@@ -10,6 +10,7 @@
   },
   "license": "Amazon Software License",
   "devDependencies": {
+    "serverless": "^1.38.0",
     "standard": "^12.0.1"
   }
 }

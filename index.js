@@ -40,6 +40,7 @@ const esMaxSockets = 20
 
 /* Lambda "main": Execution starts here */
 exports.handler = (event, context) => {
+  console.log("Hello")
   // Set indexTimestamp and esDomain index fresh on each run
   indexTimestamp = new Date().toISOString().replace(/-/g, '.').replace(/T.+/, '')
 
@@ -63,6 +64,8 @@ exports.handler = (event, context) => {
     maxSockets: esMaxSockets
   })
 
+  console.log("Connected to ES")
+
   // Prepare bulk buffer
   initBulkBuffer()
 
@@ -79,7 +82,9 @@ exports.handler = (event, context) => {
     objectMode: true
   })
 
-  recordStream._transform = (line, encoding, done) => {
+  // We want `this` shared for the function
+  recordStream._transform = function transform(line, encoding, done) {
+    // console.log("Transforming line")
     const logRecord = parse(line.toString())
 
     const serializedRecord = JSON.stringify(logRecord)
@@ -103,6 +108,7 @@ exports.handler = (event, context) => {
  * .log.gz files (as part of the Event Source "suffix" setting).
  */
 const s3LogsToES = (bucket, key, context, lineStream, recordStream) => {
+  console.log(`Processing s3://${bucket}/${key}`)
   const s3Stream = s3.getObject({
     Bucket: bucket,
     Key: key
@@ -152,6 +158,7 @@ const checkFlushBuffer = () => {
 }
 
 const flushBuffer = () => {
+  // console.log("Sending buffer to ES")
   // Map the raw lines into an ES bulk transaction body
   const bulkBody = convertBufferToBulkBody(bulkBuffer)
 
@@ -181,6 +188,7 @@ const convertBufferToBulkBody = (buffer) => {
 }
 
 const postBulkDocumentsToES = (bulkBody) => {
+  console.log(`Posting ${JSON.stringify(bulkBody)}`)
   elasticsearch.bulk({ body: bulkBody })
 }
 
@@ -193,7 +201,7 @@ const parse = (line) => {
   // but are also quote-enclosed for strings containing spaces.
   const fieldNames = [
     'type',
-    'timestamp',
+    '@timestamp',
     'elb',
     'client',
     'target',

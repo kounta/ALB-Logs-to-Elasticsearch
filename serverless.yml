@@ -1,0 +1,50 @@
+service: alb-logs-to-elasticsearch # NOTE: update this with your service name
+
+provider:
+  name: aws
+  runtime: nodejs8.10
+  region: ${env:AWS_REGION}
+  iamRoleStatements:
+    - Effect: "Allow"
+      Action:
+        - "s3:GetObject"
+      Resource: "*"
+
+functions:
+  handler:
+    handler: index.handler
+    memorySize: 128
+    timeout: 30
+    environment:
+      ES_ENDPOINT:
+        Fn::Join:
+          - ""
+          - - "https://"
+            - Fn::ImportValue: evergreen-elasticsearchhostname
+      ES_INDEX_PREFIX: alblogs
+      ES_DOCTYPE: doc
+      ES_BULKSIZE: 10
+    vpc:
+      securityGroupIds:
+        - Ref: SecurityGroup
+      subnetIds:
+        - Fn::ImportValue: region-private-subnet-0
+        - Fn::ImportValue: region-private-subnet-1
+        - Fn::ImportValue: region-private-subnet-2
+
+resources:
+  Resources:
+    SecurityGroup:
+      Type: AWS::EC2::SecurityGroup
+      Properties:
+        GroupDescription: Allow connections out over HTTPS
+        Tags:
+          - Key: Name
+            Value: evergreen-lambda-alb-forwarder
+        SecurityGroupEgress:
+          - CidrIp: 10.0.0.0/8
+            FromPort: 443
+            ToPort: 443
+            IpProtocol: tcp
+        VpcId:
+          Fn::ImportValue: region-vpc
