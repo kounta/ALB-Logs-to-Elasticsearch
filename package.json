@@ -3,7 +3,7 @@
   "description": "AWS Lambda to get ALB log files from S3 and parse them to ES with bulk indexing",
   "version": "3.0.0",
   "dependencies": {
-    "aws-sdk": "^2.414.0",
+    "aws-sdk": "^2.814.0",
     "byline": "^5.0.0",
     "elasticsearch": "^15.4.1",
     "stream": "0.0.2"
